@@ -1,0 +1,13 @@
+# Sauvegardes et données personnelles — ne pas publier
+*.json
+!manifest.json
+
+# Anciens fichiers de développement
+Vincent.html
+
+# Versions archivées (conservées localement)
+Ressources/
+
+# OS
+.DS_Store
+Thumbs.db
