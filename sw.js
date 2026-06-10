@@ -6,7 +6,7 @@
    - Quand un nouveau SW est détecté, le cache est mis à jour discrètement.
    ============================================================= */
 
-const CACHE_NAME = 'sportnote-v8.3';
+const CACHE_NAME = 'sportnote-v8.3.1';
 const ASSETS = [
   './',
   './index.html',

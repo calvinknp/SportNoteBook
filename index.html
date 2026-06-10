@@ -1432,7 +1432,8 @@ function readBackups(){try{return JSON.parse(localStorage.getItem(BACKUP_KEY)||"
    ================================================================================= */
 function uid(){return Math.random().toString(36).slice(2,10);}
 function todayISO(){const d=new Date();const t=new Date(d.getTime()-d.getTimezoneOffset()*60000);return t.toISOString().slice(0,10);}
-const byDate=(a,b)=>a.dateISO<b.dateISO?-1:a.dateISO>b.dateISO?1:0;
+/* Déclaration "function" (hoistée) : load() s'exécute plus haut dans le script et en a besoin. */
+function byDate(a,b){return a.dateISO<b.dateISO?-1:a.dateISO>b.dateISO?1:0;}
 function sortSessions(p){p.sessions.sort(byDate);}
 function fmtChip(iso){try{return new Date(iso+'T00:00').toLocaleDateString('fr-FR',{weekday:'short',day:'numeric',month:'short'});}catch(e){return iso;}}
 function fmtLong(iso){try{return new Date(iso+'T00:00').toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long',year:'numeric'});}catch(e){return iso;}}
