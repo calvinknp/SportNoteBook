@@ -697,6 +697,7 @@
   <div class="modal">
     <h2>Nouvelle séance</h2>
     <p>Partez d'une feuille vierge ou d'un de vos programmes type.</p>
+    <label class="sess-date" style="margin-bottom:14px;display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600;color:var(--text-2);">Date de la séance <input type="date" class="txt" id="newSessionDate" style="flex:0 0 auto;width:auto;"></label>
     <div id="chooseList"><button class="choose-opt" onclick="newSession();closeChoose();"><span class="ci">📝</span><span>Séance vierge<small>Repartir de zéro</small></span></button><button class="choose-opt" onclick="applyTemplate('qz7x1x9s')"><span class="ci">📋</span><span>jambes<small>3 exercices · charges auto-ajustées</small></span></button></div>
     <div class="modal-actions"><button class="btn ghost" onclick="closeChoose()">Annuler</button></div>
   </div>
@@ -1392,7 +1393,10 @@ function normalize(s){
     p.nutritionMode.history=(p.nutritionMode.history||[]).map(h=>({dateISO:h.dateISO||todayISO(),mode:h.mode||"maintain"}));
     /* séances */
     p.sessions=p.sessions||[];
-    p.sessions.forEach(se=>{if(!se.dateISO)se.dateISO=todayISO();se.name=se.name||"Séance";
+    /* Garantit un id unique par séance : sans cela, sélection/sauvegarde par id pourraient écraser une autre séance. */
+    const seenIds=new Set();
+    p.sessions.forEach(se=>{if(!se.id||seenIds.has(se.id))se.id=uid();seenIds.add(se.id);
+      if(!se.dateISO)se.dateISO=todayISO();se.name=se.name||"Séance";
       se.exercises=(se.exercises||[]).map(e=>({id:e.id||uid(),name:e.name||"",cat:e.cat||"",suggested:!!e.suggested,
         sets:(e.sets||[]).map(st=>({reps:st.reps||"",weight:st.weight||"",rest:(st.rest!==undefined?String(st.rest):""),done:!!st.done}))}));});
     sortSessions(p);
@@ -1702,15 +1706,19 @@ function updTplEx(eid,field,val){const e=activeTemplate().exercises.find(x=>x.id
 
 /* ----- SÉANCES ----- */
 function chooseSessionStart(){
-  if(state.templates.length===0){newSession();return;}
   const list=document.getElementById("chooseList");
   let h=`<button class="choose-opt" onclick="newSession();closeChoose();"><span class="ci">${ICONS.fileText}</span><span>Séance vierge<small>Repartir de zéro</small></span></button>`;
   state.templates.forEach(t=>{h+=`<button class="choose-opt" onclick="applyTemplate('${t.id}')"><span class="ci">${ICONS.clipboard}</span><span>${escapeHtml(t.name)}<small>${t.exercises.length} exercice${t.exercises.length>1?'s':''} · charges auto-ajustées</small></span></button>`;});
-  list.innerHTML=h;document.getElementById("chooseOverlay").classList.add("show");
+  list.innerHTML=h;
+  const d=document.getElementById("newSessionDate");if(d)d.value=todayISO();
+  document.getElementById("chooseOverlay").classList.add("show");
 }
 function closeChoose(){document.getElementById("chooseOverlay").classList.remove("show");}
+/* Date choisie dans le modal "Nouvelle séance" (repli sur aujourd'hui). Chaque création reçoit son propre uid() : aucune séance existante n'est touchée. */
+function newSessionDate(){return document.getElementById("newSessionDate")?.value||todayISO();}
 function newSession(){const p=activeProfile();if(!p)return;
-  const s={id:uid(),date:todayISO(),dateISO:todayISO(),name:"Séance",exercises:[]};
+  const iso=newSessionDate();
+  const s={id:uid(),date:iso,dateISO:iso,name:"Séance",exercises:[]};
   p.sessions.push(s);sortSessions(p);p.activeSessionId=s.id;save();closeMenu();render();}
 function suggestWeight(w){const n=parseFloat(w);return(!isNaN(n)&&n>0)?String(+(n+2.5).toFixed(1)):(w||"");}
 function lastPerformance(p,exName,exceptSessionId){
@@ -1721,15 +1729,17 @@ function lastPerformance(p,exName,exceptSessionId){
 }
 function applyTemplate(tid){
   const p=activeProfile(),t=state.templates.find(x=>x.id===tid);if(!p||!t)return;
-  const s={id:uid(),dateISO:todayISO(),name:t.name,exercises:[]};
+  const iso=newSessionDate();
+  const s={id:uid(),date:iso,dateISO:iso,name:t.name,exercises:[]};
   t.exercises.forEach(te=>{
     const prev=lastPerformance(p,te.name,null);
     const count=Math.max(1,parseInt(te.sets)||1);
     const sets=[];let suggested=false;
     for(let i=0;i<count;i++){
       const ps=prev?prev[i]:null;
-      if(ps){suggested=true;sets.push({reps:ps.reps||te.reps||"",weight:suggestWeight(ps.weight),rest:(te.rest||ps.rest||""),done:false});}
-      else sets.push({reps:te.reps||"",weight:"",rest:(te.rest||""),done:false});
+      /* Charge pré-remplie depuis la dernière séance ; reps laissées vides à remplir pendant l'entraînement. */
+      if(ps){suggested=true;sets.push({reps:"",weight:suggestWeight(ps.weight),rest:(te.rest||ps.rest||""),done:false});}
+      else sets.push({reps:"",weight:"",rest:(te.rest||""),done:false});
     }
     s.exercises.push({id:uid(),name:te.name,cat:te.cat,suggested,sets});
   });
@@ -1758,7 +1768,8 @@ function onExerciseName(eid,val){
   if(info){e.cat=info.cat;
     const prev=lastPerformance(p,val,s.id);
     if(prev&&e.sets.every(st=>!st.reps&&!st.weight)){
-      e.sets=prev.map(st=>({reps:st.reps,weight:suggestWeight(st.weight),rest:st.rest,done:false}));e.suggested=true;
+      /* Charge pré-remplie depuis la dernière séance ; reps laissées vides. */
+      e.sets=prev.map(st=>({reps:"",weight:suggestWeight(st.weight),rest:st.rest,done:false}));e.suggested=true;
     }else{e.sets.forEach(st=>{if(!st.rest&&info.rest)st.rest=String(info.rest);});}
   }else e.cat="";
   save();renderContent();
@@ -2995,21 +3006,9 @@ function renderProgress(p,c){
     html+=`</div>`;
   }
 
-  /* Courbes de progression par exercice */
-  if(exercises.length){
-    html+=`<details class="collap" id="allExChartsSection" open>
-      <summary><span style="display:inline-flex;align-items:center;gap:6px;">${ICONS.chartBar} Progression par exercice</span> <span class="tag">${exercises.length} exercice${exercises.length>1?"s":""}</span> <span class="chev">›</span></summary>
-      <div class="collap-body" style="padding:0;display:flex;flex-direction:column;gap:0;">`;
-    exercises.forEach(exName=>{
-      const eid='progex_'+exName.trim().toLowerCase().replace(/[^a-z0-9]/g,'_');
-      html+=renderExChart(eid,exName,p.id);
-    });
-    html+=`</div></details>`;
-  }
-
-  /* Pesées */
+  /* Suivi du poids de corps — section dédiée, distincte de la progression des exercices */
   html+=`<details class="collap" id="weightsSection" ${p.weights.length?"open":""}>
-    <summary><span style="display:inline-flex;align-items:center;gap:6px;">${ICONS.scale} Pesées</span> <span class="tag">${p.weights.length} entrées</span> <span class="chev">›</span></summary>
+    <summary><span style="display:inline-flex;align-items:center;gap:6px;">${ICONS.scale} Suivi du poids de corps</span> <span class="tag">${p.weights.length} entrées</span> <span class="chev">›</span></summary>
     <div class="collap-body">
       <div class="weight-add">
         <div class="wf"><label>Date</label><input type="date" id="wDate" value="${todayISO()}"></div>
@@ -3022,6 +3021,18 @@ function renderProgress(p,c){
       :`<div style="color:var(--text-2);font-size:13px;padding:6px 0">Aucune pesée enregistrée.</div>`}
     </div>
   </details>`;
+
+  /* Courbes de progression par exercice */
+  if(exercises.length){
+    html+=`<details class="collap" id="allExChartsSection" open>
+      <summary><span style="display:inline-flex;align-items:center;gap:6px;">${ICONS.chartBar} Progression par exercice</span> <span class="tag">${exercises.length} exercice${exercises.length>1?"s":""}</span> <span class="chev">›</span></summary>
+      <div class="collap-body" style="padding:0;display:flex;flex-direction:column;gap:0;">`;
+    exercises.forEach(exName=>{
+      const eid='progex_'+exName.trim().toLowerCase().replace(/[^a-z0-9]/g,'_');
+      html+=renderExChart(eid,exName,p.id);
+    });
+    html+=`</div></details>`;
+  }
 
   c.innerHTML=html;
 }
