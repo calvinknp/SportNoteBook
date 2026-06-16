@@ -424,6 +424,13 @@
   .choose-opt small{display:block;font-weight:500;color:var(--text-2);font-size:12px;margin-top:1px;}
   .choose-opt:hover small{color:var(--accent);}
 
+  /* PROGRESSION OVERLAY */
+  .prog-global-lbl{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;color:var(--text-2);margin-bottom:6px;}
+  .prog-ex-item{background:var(--surface-2);border-radius:14px;padding:14px 16px;margin-bottom:10px;}
+  .prog-ex-name{font-size:15px;font-weight:700;margin-bottom:3px;}
+  .prog-ex-prev{font-size:12px;color:var(--text-2);margin-bottom:9px;}
+  .prog-ex-result{font-size:12px;color:var(--accent);font-weight:600;margin-top:8px;min-height:16px;}
+
   /* TIMER */
   .timer{position:fixed;bottom:26px;left:50%;transform:translateX(-50%) translateY(140px);background:var(--glass);
     backdrop-filter:blur(28px) saturate(180%);-webkit-backdrop-filter:blur(28px) saturate(180%);border:1px solid var(--sep);
@@ -1001,6 +1008,26 @@
     </div>
   </div>
 </div>
+<div class="overlay" id="progressOverlay">
+  <div class="modal" style="width:420px;max-width:92vw;max-height:82vh;overflow-y:auto;padding-bottom:20px;">
+    <h2>Progression</h2>
+    <p>Définissez comment progresser par rapport à la dernière séance.</p>
+    <label style="display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600;color:var(--text-2);margin-bottom:16px;">Date <input type="date" class="txt" id="progressDate" style="flex:0 0 auto;width:auto;margin-bottom:0;"></label>
+    <div style="margin-bottom:16px;">
+      <div class="prog-global-lbl">Appliquer à tous</div>
+      <div class="range-seg" id="progGlobalSeg">
+        <button class="active" onclick="setGlobalProg('same')">Identique</button>
+        <button onclick="setGlobalProg('reps')">+1 rép</button>
+        <button onclick="setGlobalProg('weight')">+2,5 kg</button>
+      </div>
+    </div>
+    <div id="progressList"></div>
+    <div class="modal-actions" style="margin-top:4px;">
+      <button class="btn ghost" onclick="closeProgress()">Annuler</button>
+      <button class="btn primary" onclick="confirmProgress()">Créer la séance</button>
+    </div>
+  </div>
+</div>
 <div class="timer" id="timer">
   <div class="ring">
     <svg width="48" height="48"><circle cx="24" cy="24" r="21" stroke="var(--sep)" stroke-width="5" fill="none"></circle>
@@ -1321,7 +1348,7 @@ const BACKUP_DEBOUNCE=8000;    // ms d'inactivité avant un instantané
 
 let state=load();
 let editingProfileId=null, pickedColor=COLORS[5], editingTplId=null, confirmCb=null;
-let backupTimer=null;
+let backupTimer=null, pendingProgress=null;
 
 function blankNutrition(){return{targets:{kcal:2200,prot:160,gluc:230,lip:70},days:{},mealAliases:{}};}
 function blankChartPrefs(){return{metric:"vol_session",exercise:"",muscleGroup:"",range:"180",color:CHART_COLORS[0],title:"",goal:{enabled:false,value:0,dateISO:"",label:""}};}
@@ -1705,12 +1732,20 @@ function updTplExName(eid,val){const t=activeTemplate();const e=t.exercises.find
 function updTplEx(eid,field,val){const e=activeTemplate().exercises.find(x=>x.id===eid);e[field]=val;save();}
 
 /* ----- SÉANCES ----- */
+function nextSessionDate(){
+  const p=activeProfile();
+  if(!p||!p.sessions.length)return todayISO();
+  const last=[...p.sessions].sort((a,b)=>byDate(b,a))[0];
+  const d=new Date((last.dateISO||todayISO())+"T12:00:00");
+  d.setDate(d.getDate()+1);
+  return d.toISOString().slice(0,10);
+}
 function chooseSessionStart(){
   const list=document.getElementById("chooseList");
   let h=`<button class="choose-opt" onclick="newSession();closeChoose();"><span class="ci">${ICONS.fileText}</span><span>Séance vierge<small>Repartir de zéro</small></span></button>`;
-  state.templates.forEach(t=>{h+=`<button class="choose-opt" onclick="applyTemplate('${t.id}')"><span class="ci">${ICONS.clipboard}</span><span>${escapeHtml(t.name)}<small>${t.exercises.length} exercice${t.exercises.length>1?'s':''} · charges auto-ajustées</small></span></button>`;});
+  state.templates.forEach(t=>{h+=`<button class="choose-opt" onclick="closeChoose();showProgressOverlay('template','${t.id}')"><span class="ci">${ICONS.clipboard}</span><span>${escapeHtml(t.name)}<small>${t.exercises.length} exercice${t.exercises.length>1?'s':''} · progression configurable</small></span></button>`;});
   list.innerHTML=h;
-  const d=document.getElementById("newSessionDate");if(d)d.value=todayISO();
+  const d=document.getElementById("newSessionDate");if(d)d.value=nextSessionDate();
   document.getElementById("chooseOverlay").classList.add("show");
 }
 function closeChoose(){document.getElementById("chooseOverlay").classList.remove("show");}
@@ -1746,10 +1781,122 @@ function applyTemplate(tid){
   p.sessions.push(s);sortSessions(p);p.activeSessionId=s.id;save();closeChoose();closeMenu();render();
 }
 function duplicateLast(){const p=activeProfile();if(!p||p.sessions.length===0)return;
-  const last=[...p.sessions].sort((a,b)=>byDate(b,a))[0];
-  const copy={id:uid(),dateISO:todayISO(),name:last.name,exercises:last.exercises.map(e=>({id:uid(),name:e.name,cat:e.cat,suggested:false,
-    sets:e.sets.map(st=>({reps:st.reps,weight:suggestWeight(st.weight),rest:st.rest,done:false}))}))};
-  p.sessions.push(copy);sortSessions(p);p.activeSessionId=copy.id;save();render();}
+  showProgressOverlay('duplicate',null);}
+/* ----- OVERLAY PROGRESSION DES CHARGES ----- */
+function fmtSetsStr(sets,addRepsLast,addWeight){
+  if(!sets||!sets.length)return"—";
+  const proc=sets.map((st,i)=>{
+    const r=parseInt(st.reps)||0;
+    const w=parseFloat(st.weight)||0;
+    return{reps:i===sets.length-1?r+addRepsLast:r,weight:+(w+addWeight).toFixed(1)};
+  });
+  const groups=[];
+  proc.forEach(s=>{const last=groups[groups.length-1];if(last&&last.reps===s.reps&&last.weight===s.weight){last.count++;}else{groups.push({reps:s.reps,weight:s.weight,count:1});}});
+  return groups.map(g=>`${g.count}×${g.reps||"?"}${g.weight>0?" @ "+g.weight+" kg":""}`).join(" + ");
+}
+function fmtSetsPreview(sets,choice){
+  if(choice==="weight")return fmtSetsStr(sets,0,2.5);
+  if(choice==="reps")return fmtSetsStr(sets,1,0);
+  return fmtSetsStr(sets,0,0);
+}
+function renderProgressList(){
+  if(!pendingProgress)return;
+  const choices=["same","reps","weight"];
+  const labels=["Identique","+1 rép","+2,5 kg"];
+  let h="";
+  pendingProgress.exercises.forEach((ex,idx)=>{
+    if(!ex.prevSets||!ex.prevSets.length)return;
+    const prev=fmtSetsStr(ex.prevSets,0,0);
+    const result=fmtSetsPreview(ex.prevSets,ex.choice);
+    const btns=choices.map((c,ci)=>`<button class="${ex.choice===c?"active":""}" onclick="setExProg(${idx},'${c}')">${labels[ci]}</button>`).join("");
+    h+=`<div class="prog-ex-item">
+      <div class="prog-ex-name">${escapeHtml(ex.name)}</div>
+      <div class="prog-ex-prev">Dernière : ${prev}</div>
+      <div class="range-seg">${btns}</div>
+      <div class="prog-ex-result">${result}</div>
+    </div>`;
+  });
+  document.getElementById("progressList").innerHTML=h||`<div style="color:var(--text-2);font-size:14px;text-align:center;padding:12px;">Aucun historique trouvé — les charges seront vides.</div>`;
+}
+function showProgressOverlay(source,templateId){
+  const p=activeProfile();if(!p)return;
+  let exercises=[];let sessionName="Séance";
+  if(source==="template"){
+    const t=state.templates.find(x=>x.id===templateId);if(!t)return;
+    sessionName=t.name;
+    t.exercises.forEach(te=>{
+      const prevSets=lastPerformance(p,te.name,null);
+      exercises.push({name:te.name,cat:te.cat,prevSets,templateEx:te,choice:"weight"});
+    });
+  }else{
+    const last=[...p.sessions].sort((a,b)=>byDate(b,a))[0];if(!last)return;
+    sessionName=last.name;
+    last.exercises.forEach(e=>{exercises.push({name:e.name,cat:e.cat,prevSets:e.sets,templateEx:null,choice:"weight"});});
+  }
+  pendingProgress={source,templateId,exercises,sessionName};
+  const dateEl=document.getElementById("progressDate");if(dateEl)dateEl.value=nextSessionDate();
+  const gBtns=document.querySelectorAll("#progGlobalSeg button");
+  gBtns.forEach((b,i)=>b.classList.toggle("active",i===2));
+  renderProgressList();
+  document.getElementById("progressOverlay").classList.add("show");
+}
+function setExProg(idx,choice){
+  if(!pendingProgress)return;
+  pendingProgress.exercises[idx].choice=choice;
+  renderProgressList();
+}
+function setGlobalProg(choice){
+  if(!pendingProgress)return;
+  pendingProgress.exercises.forEach(ex=>{ex.choice=choice;});
+  const choices=["same","reps","weight"];
+  document.querySelectorAll("#progGlobalSeg button").forEach((b,i)=>b.classList.toggle("active",choices[i]===choice));
+  renderProgressList();
+}
+function applyProgressChoice(st,choice,isLast){
+  const reps=parseInt(st.reps)||0;
+  const weight=parseFloat(st.weight)||0;
+  let newR=String(reps||""),newW=String(weight||"");
+  if(choice==="weight"){newW=weight>0?String(+(weight+2.5).toFixed(1)):"";newR=reps>0?String(reps):"";}
+  else if(choice==="reps"){newW=weight>0?String(weight):"";newR=isLast?(reps>0?String(reps+1):""):(reps>0?String(reps):"");}
+  else{newW=weight>0?String(weight):"";newR=reps>0?String(reps):"";}
+  return{reps:newR,weight:newW,rest:st.rest||"",done:false};
+}
+function confirmProgress(){
+  if(!pendingProgress)return;
+  const p=activeProfile();if(!p)return;
+  const iso=document.getElementById("progressDate").value||todayISO();
+  const{source,templateId,exercises,sessionName}=pendingProgress;
+  const s={id:uid(),date:iso,dateISO:iso,name:sessionName,exercises:[]};
+  if(source==="template"){
+    const t=state.templates.find(x=>x.id===templateId);if(!t)return;
+    t.exercises.forEach(te=>{
+      const exInfo=exercises.find(ex=>ex.name===te.name);
+      const choice=exInfo?exInfo.choice:"weight";
+      const prevSets=exInfo?exInfo.prevSets:null;
+      const count=Math.max(1,parseInt(te.sets)||1);
+      const sets=[];let suggested=false;
+      for(let i=0;i<count;i++){
+        const ps=prevSets?prevSets[i]:null;
+        if(ps){suggested=true;sets.push(applyProgressChoice(ps,choice,i===count-1));}
+        else sets.push({reps:"",weight:"",rest:te.rest||"",done:false});
+      }
+      s.exercises.push({id:uid(),name:te.name,cat:te.cat,suggested,sets});
+    });
+  }else{
+    const last=[...p.sessions].sort((a,b)=>byDate(b,a))[0];if(!last)return;
+    last.exercises.forEach(e=>{
+      const exInfo=exercises.find(ex=>ex.name===e.name);
+      const choice=exInfo?exInfo.choice:"weight";
+      const newSets=e.sets.map((st,i)=>applyProgressChoice(st,choice,i===e.sets.length-1));
+      s.exercises.push({id:uid(),name:e.name,cat:e.cat,suggested:choice!=="same",sets:newSets});
+    });
+  }
+  p.sessions.push(s);sortSessions(p);p.activeSessionId=s.id;
+  save();closeProgress();closeMenu();render();
+  pendingProgress=null;
+}
+function closeProgress(){document.getElementById("progressOverlay").classList.remove("show");pendingProgress=null;}
+
 function selectSession(id){activeProfile().activeSessionId=id;save();closeMenu();render();}
 function updSessionName(id,val){const s=activeProfile().sessions.find(x=>x.id===id);s.name=val||"Séance";save();}
 function changeSessionDate(id,val){if(!val)return;const p=activeProfile();const s=p.sessions.find(x=>x.id===id);s.dateISO=val;sortSessions(p);save();render();}
@@ -1821,7 +1968,7 @@ function toggleDone(eid,i){
   e.sets[i].done=!e.sets[i].done;save();
   if(e.sets[i].done){
     const r=parseInt(e.sets[i].rest);const total=e.sets.length;
-    if(r>0&&i<total-1)startTimer(r,e.name+" · avant série "+(i+2)+"/"+total);
+    if(r>0){const lbl=i<total-1?e.name+" · avant série "+(i+2)+"/"+total:e.name+" · récupération";startTimer(r,lbl);}
     const s=activeSession(p);
     const allDone=s.exercises.length>0&&s.exercises.every(ex=>ex.sets.length>0&&ex.sets.every(st=>st.done));
     if(allDone)showWorkoutSummary(p,s);
@@ -2573,7 +2720,7 @@ function _renderContentInner(){
         <div class="ex-cat">${escapeHtml(e.cat||"")}</div></div>
       <button class="ex-dup" title="Dupliquer l'exercice" onclick="duplicateExercise('${e.id}')">${ICONS.copy}</button>
       <button class="ex-del" onclick="removeExercise('${e.id}')">${ICONS.x}</button></div>`;
-    if(e.suggested)html+=`<div class="suggest-badge">${ICONS.sparkle} Suggéré d'après la dernière séance (+2,5 kg)</div>`;
+    if(e.suggested)html+=`<div class="suggest-badge">${ICONS.sparkle} Progression configurée d'après la dernière séance</div>`;
     html+=`<div class="sets"><div class="sets-head"><span></span><span>Série</span><span>Reps</span><span>Charge</span><span>Repos</span><span></span></div>`;
     e.sets.forEach((st,i)=>{html+=`<div class="set-row ${st.done?'done':''}">
         <button class="set-del" onclick="removeSet('${e.id}',${i})">−</button>
@@ -3187,7 +3334,7 @@ function importData(e){
 (function(){const dl=document.createElement("datalist");dl.id="exlist";
   Object.values(LIBRARY).flat().forEach(([n])=>{const o=document.createElement("option");o.value=n;dl.appendChild(o);});document.body.appendChild(dl);})();
 
-[["overlay",closeModal],["tplOverlay",closeTpl],["chooseOverlay",closeChoose],["confirmOverlay",closeConfirm],["backupOverlay",closeBackups],["foodOverlay",closeFoodModal]].forEach(([id,fn])=>{
+[["overlay",closeModal],["tplOverlay",closeTpl],["chooseOverlay",closeChoose],["confirmOverlay",closeConfirm],["backupOverlay",closeBackups],["foodOverlay",closeFoodModal],["progressOverlay",closeProgress]].forEach(([id,fn])=>{
   document.getElementById(id).addEventListener("click",e=>{if(e.target.id===id)fn();});});
 
 document.getElementById("profileNameInput").addEventListener("keydown",e=>{if(e.key==="Enter")saveProfile();});
