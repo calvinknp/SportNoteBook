@@ -1013,6 +1013,7 @@
     <h2>Progression</h2>
     <p>Définissez comment progresser par rapport à la dernière séance.</p>
     <label style="display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600;color:var(--text-2);margin-bottom:16px;">Date <input type="date" class="txt" id="progressDate" style="flex:0 0 auto;width:auto;margin-bottom:0;"></label>
+<div style="margin:14px 0 10px;"><label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-2);"><input type="checkbox" id="progBlankCheckbox" style="width:14px;height:14px;"> Laisser les séries vides</label></div>
     <div style="margin-bottom:16px;">
       <div class="prog-global-lbl">Appliquer à tous</div>
       <div class="range-seg" id="progGlobalSeg">
@@ -1743,7 +1744,9 @@ function nextSessionDate(){
 function chooseSessionStart(){
   const list=document.getElementById("chooseList");
   let h=`<button class="choose-opt" onclick="newSession();closeChoose();"><span class="ci">${ICONS.fileText}</span><span>Séance vierge<small>Repartir de zéro</small></span></button>`;
-  state.templates.forEach(t=>{h+=`<button class="choose-opt" onclick="closeChoose();showProgressOverlay('template','${t.id}')"><span class="ci">${ICONS.clipboard}</span><span>${escapeHtml(t.name)}<small>${t.exercises.length} exercice${t.exercises.length>1?'s':''} · progression configurable</small></span></button>`;});
+  // Add checkbox for blank sets
+  h+=`<div style="margin:14px 0 10px;"><label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-2);"><input type="checkbox" id="progBlankCheckbox" style="width:14px;height:14px;"> Laisser les séries vides</label></div>`;
+  state.templates.forEach(t=>{h+=`<button class="choose-opt" onclick="const blank=document.getElementById('progBlankCheckbox').checked; closeChoose(); if(blank) applyTemplateBlank('${t.id}'); else showProgressOverlay('template','${t.id}')"><span class="ci">${ICONS.clipboard}</span><span>${escapeHtml(t.name)}<small>${t.exercises.length} exercice${t.exercises.length>1?'s':''} · progression configurable</small></span></button>`;});
   list.innerHTML=h;
   const d=document.getElementById("newSessionDate");if(d)d.value=nextSessionDate();
   document.getElementById("chooseOverlay").classList.add("show");
@@ -1780,6 +1783,21 @@ function applyTemplate(tid){
   });
   p.sessions.push(s);sortSessions(p);p.activeSessionId=s.id;save();closeChoose();closeMenu();render();
 }
+function applyTemplateBlank(tid){
+  const p=activeProfile(),t=state.templates.find(x=>x.id===tid);if(!p||!t)return;
+  const iso=newSessionDate();
+  const s={id:uid(),date:iso,dateISO:iso,name:t.name,exercises:[]};
+  t.exercises.forEach(te=>{
+    const count=Math.max(1,parseInt(te.sets)||1);
+    const sets=[];let suggested=false;
+    for(let i=0;i<count;i++){
+      sets.push({reps:"",weight:"",rest:(te.rest||""),done:false});
+    }
+    s.exercises.push({id:uid(),name:te.name,cat:te.cat,suggested:false,sets});
+  });
+  p.sessions.push(s);sortSessions(p);p.activeSessionId=s.id;save();closeMenu();render();
+}
+
 function duplicateLast(){const p=activeProfile();if(!p||p.sessions.length===0)return;
   showProgressOverlay('duplicate',null);}
 /* ----- OVERLAY PROGRESSION DES CHARGES ----- */
@@ -1867,6 +1885,7 @@ function confirmProgress(){
   const iso=document.getElementById("progressDate").value||todayISO();
   const{source,templateId,exercises,sessionName}=pendingProgress;
   const s={id:uid(),date:iso,dateISO:iso,name:sessionName,exercises:[]};
+  const blank = document.getElementById('progBlankCheckbox')?.checked;
   if(source==="template"){
     const t=state.templates.find(x=>x.id===templateId);if(!t)return;
     t.exercises.forEach(te=>{
@@ -1877,18 +1896,22 @@ function confirmProgress(){
       const sets=[];let suggested=false;
       for(let i=0;i<count;i++){
         const ps=prevSets?prevSets[i]:null;
-        if(ps){suggested=true;sets.push(applyProgressChoice(ps,choice,i===count-1));}
-        else sets.push({reps:"",weight:"",rest:te.rest||"",done:false});
+        if(blank){
+          sets.push({reps:"",weight:"",rest:te.rest||"",done:false});
+        }else{
+          if(ps){suggested=true;sets.push(applyProgressChoice(ps,choice,i===count-1));}
+          else sets.push({reps:"",weight:"",rest:te.rest||"",done:false});
+        }
       }
-      s.exercises.push({id:uid(),name:te.name,cat:te.cat,suggested,sets});
+      s.exercises.push({id:uid(),name:te.name,cat:te.cat,suggested:!blank && sets.some(st=>st.reps||st.weight),sets});
     });
   }else{
     const last=[...p.sessions].sort((a,b)=>byDate(b,a))[0];if(!last)return;
     last.exercises.forEach(e=>{
       const exInfo=exercises.find(ex=>ex.name===e.name);
       const choice=exInfo?exInfo.choice:"weight";
-      const newSets=e.sets.map((st,i)=>applyProgressChoice(st,choice,i===e.sets.length-1));
-      s.exercises.push({id:uid(),name:e.name,cat:e.cat,suggested:choice!=="same",sets:newSets});
+      const newSets=e.sets.map((st,i)=>blank?{reps:"",weight:"",rest:st.rest,done:false}:applyProgressChoice(st,choice,i===e.sets.length-1));
+      s.exercises.push({id:uid(),name:e.name,cat:e.cat,suggested:!blank && newSets.some(st=>st.reps||st.weight),sets:newSets});
     });
   }
   p.sessions.push(s);sortSessions(p);p.activeSessionId=s.id;
